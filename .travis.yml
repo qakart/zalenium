@@ -1,6 +1,6 @@
 language: java
 jdk:
-  - oraclejdk8
+  - openjdk8
 
 sudo: required
 
@@ -21,6 +21,24 @@ jobs:
       script:
         - docker pull elgalu/selenium
         - travis_retry ./run_integration_tests.sh browserStack
+
+    - env: step=crossBrowserTesting
+      if: type = pull_request
+      script:
+        - docker pull elgalu/selenium
+        - travis_retry ./run_integration_tests.sh crossBrowserTesting
+
+    - env: step=testingBot
+      if: type = pull_request
+      script:
+        - docker pull elgalu/selenium
+        - travis_retry ./run_integration_tests.sh testingBot
+
+    - env: step=lambdaTest
+      if: type = pull_request
+      script:
+        - docker pull elgalu/selenium
+        - travis_retry ./run_integration_tests.sh lambdaTest
 
     - env: step=dockerCompose
       if: type = pull_request
@@ -57,9 +75,3 @@ jobs:
       script:
       - ./gen-scm-source.sh
       - ./push_image.sh
-
-branches:
-  only:
-    - master
-    # Regular expression for release branches. E.g. -> 2.53.1a, 3.0.1a
-    - /^([0-9]|[0-9][0-9])[.]([0-9]|[0-9][0-9])[.]([0-9]|[0-9][0-9])[a-z]$/

@@ -18,12 +18,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+# curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl && chmod +x kubectl && sudo mv kubectl /usr/local/bin/
 curl -Lo kubectl https://storage.googleapis.com/kubernetes-release/release/v1.9.0/bin/linux/amd64/kubectl && chmod +x kubectl && sudo mv kubectl /usr/local/bin/
-#curl -Lo minikube https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64 && chmod +x minikube && sudo mv minikube /usr/local/bin/
+
+# curl -Lo minikube https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64 && chmod +x minikube && sudo mv minikube /usr/local/bin/
 curl -Lo minikube https://storage.googleapis.com/minikube/releases/v0.25.2/minikube-linux-amd64 && chmod +x minikube && sudo mv minikube /usr/local/bin/
 
-
+# helm
+curl -L https://storage.googleapis.com/kubernetes-helm/helm-v2.11.0-linux-amd64.tar.gz | tar -zxv && chmod +x linux-amd64/helm && sudo mv linux-amd64/helm /usr/local/bin/ && rm -rf linux-amd64
 
 
 export MINIKUBE_WANTUPDATENOTIFICATION=false
@@ -36,6 +38,7 @@ touch $HOME/.kube/config
 export KUBECONFIG=$HOME/.kube/config
 # sudo -E minikube start --vm-driver=none --extra-config=apiserver.InsecureServingOptions.BindAddress="127.0.0.1" --extra-config=apiserver.InsecureServingOptions.BindPort="8080" --kubernetes-version=v1.9.0
 sudo -E minikube start --vm-driver=none --kubernetes-version=v1.9.0
+# sudo -E minikube start --vm-driver=none
 
 # this for loop waits until kubectl can access the api server that minikube has created
 KUBECTL_UP="false"
@@ -55,6 +58,9 @@ if [ "$KUBECTL_UP" != "true" ]; then
     exit 1
 fi
 # kubectl commands are now able to interact with minikube cluster
+
+# init helm but do not install tiller
+helm init --client-only
 
 # OPTIONAL depending on kube-dns requirement
 # this for loop waits until the kubernetes addons are active

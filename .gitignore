@@ -6,3 +6,12 @@ logs/
 TODO.private.md
 velocity.log
 docs/_site
+node_modules
+errorShots
+.DS_Store
+.project
+bin/
+
+.classpath
+.settings
+.vscode

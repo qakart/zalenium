@@ -1,8 +1,12 @@
 package de.zalando.ep.zalenium.servlet.renderer;
 
 import de.zalando.ep.zalenium.proxy.BrowserStackRemoteProxy;
+import de.zalando.ep.zalenium.proxy.CBTRemoteProxy;
 import de.zalando.ep.zalenium.proxy.SauceLabsRemoteProxy;
 import de.zalando.ep.zalenium.proxy.TestingBotRemoteProxy;
+import de.zalando.ep.zalenium.proxy.LambdaTestRemoteProxy;
+import de.zalando.ep.zalenium.util.Environment;
+
 import org.openqa.grid.common.exception.GridException;
 import org.openqa.grid.internal.RemoteProxy;
 import org.openqa.grid.internal.TestSession;
@@ -20,6 +24,8 @@ public class CloudProxyHtmlRenderer implements HtmlRenderer {
 
     private RemoteProxy proxy;
     private TemplateRenderer templateRenderer;
+    private static final Environment env = new Environment();
+    private static final String contextPath = env.getContextPath();
 
     @SuppressWarnings("unused")
     private CloudProxyHtmlRenderer() {}
@@ -87,13 +93,19 @@ public class CloudProxyHtmlRenderer implements HtmlRenderer {
         TestSession session = s.getSession();
         String icon = "";
         if (proxy instanceof TestingBotRemoteProxy) {
-            icon = "/resources/images/testingbot.png";
+            icon = contextPath + "/grid/resources/images/testingbot.png";
         }
         if (proxy instanceof BrowserStackRemoteProxy) {
-            icon = "/resources/images/browserstack.png";
+            icon = contextPath + "/grid/resources/images/browserstack.png";
         }
         if (proxy instanceof SauceLabsRemoteProxy) {
-            icon = "/resources/images/saucelabs.png";
+            icon = contextPath + "/grid/resources/images/saucelabs.png";
+        }
+        if (proxy instanceof CBTRemoteProxy) {
+            icon = contextPath + "/grid/resources/images/cbt.png";
+        }
+        if (proxy instanceof LambdaTestRemoteProxy) {
+            icon = contextPath + "/grid/resources/images/lambdatest.png";
         }
         String slotClass = "";
         String slotTitle;

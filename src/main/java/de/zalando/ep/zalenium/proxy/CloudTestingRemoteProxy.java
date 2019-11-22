@@ -6,9 +6,10 @@ package de.zalando.ep.zalenium.proxy;
  */
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import de.zalando.ep.zalenium.dashboard.Dashboard;
+import de.zalando.ep.zalenium.dashboard.DashboardCollection;
 import de.zalando.ep.zalenium.dashboard.TestInformation;
 import de.zalando.ep.zalenium.matcher.ZaleniumCapabilityMatcher;
 import de.zalando.ep.zalenium.servlet.renderer.CloudProxyHtmlRenderer;
@@ -43,6 +44,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import java.util.Optional;
 
 @SuppressWarnings("WeakerAccess")
 @ManagedService(description = "CloudTesting TestSlots")
@@ -63,6 +65,7 @@ public class CloudTestingRemoteProxy extends DefaultRemoteProxy {
     private CloudProxyNodePoller cloudProxyNodePoller = null;
     private CapabilityMatcher capabilityHelper;
     private long maxTestIdleTime = DEFAULT_MAX_TEST_IDLE_TIME_SECS;
+    private JsonObject metadata;
 
     @SuppressWarnings("WeakerAccess")
     public CloudTestingRemoteProxy(RegistrationRequest request, GridRegistry registry) {
@@ -129,6 +132,8 @@ public class CloudTestingRemoteProxy extends DefaultRemoteProxy {
 
     @Override
     public TestSession getNewSession(Map<String, Object> requestedCapability) {
+        String currentName = Thread.currentThread().getName();
+        Thread.currentThread().setName(getProxyName());
         /*
             Validate first if the capability is matched
         */
@@ -136,18 +141,30 @@ public class CloudTestingRemoteProxy extends DefaultRemoteProxy {
             return null;
         }
 
-        logger.info("Test will be forwarded to " + getProxyName() + ", " + requestedCapability);
+        logger.info("Test will be forwarded to {} - {}", getProxyName(), requestedCapability);
+        Thread.currentThread().setName(currentName);
         return super.getNewSession(requestedCapability);
+    }
+
+
+    public JsonObject getMetadata() {
+        return metadata;
+    }
+
+    public void setMetadata(JsonObject metadata) {
+        this.metadata = metadata;
     }
 
     @Override
     public void beforeCommand(TestSession session, HttpServletRequest request, HttpServletResponse response) {
+        String currentName = Thread.currentThread().getName();
+        Thread.currentThread().setName(getProxyName());
         if (request instanceof WebDriverRequest && "POST".equalsIgnoreCase(request.getMethod())) {
             WebDriverRequest seleniumRequest = (WebDriverRequest) request;
             if (seleniumRequest.getRequestType().equals(RequestType.START_SESSION)) {
                 int numberOfParallelCloudSessions = getNumberOfSessions();
                 MDC.put("numberOfParallelCloudSessions",String.valueOf(numberOfParallelCloudSessions));
-                logger.info("Currently using " + numberOfParallelCloudSessions + " parallel sessions towards " + getProxyName() + ". Attempt to start one more.");
+                logger.info("Currently using " + numberOfParallelCloudSessions + " parallel sessions . Trying to start one more.");
                 MDC.clear();
 
                 String body = seleniumRequest.getBody();
@@ -161,16 +178,31 @@ public class CloudTestingRemoteProxy extends DefaultRemoteProxy {
                 try {
                     seleniumRequest.setBody(jsonObject.toString());
                 } catch (UnsupportedEncodingException e) {
-                    logger.error("Error while setting the body request in " + getProxyName()
-                            + ", " + jsonObject.toString());
+                    logger.error("Error while setting the body request in {}, {}", getProxyName(), jsonObject.toString());
+                }
+            }
+
+            if (seleniumRequest.getPathInfo() != null && seleniumRequest.getPathInfo().endsWith("cookie")) {
+                logger.info("Checking for cookies... {}", seleniumRequest.getBody());
+                JsonElement bodyRequest = new JsonParser().parse(seleniumRequest.getBody());
+                JsonObject cookie = bodyRequest.getAsJsonObject().getAsJsonObject("cookie");
+                JsonObject emptyName = new JsonObject();
+                emptyName.addProperty("name", "");
+                String cookieName = Optional.ofNullable(cookie.get("name")).orElse(emptyName.get("name")).getAsString();
+                if(CommonProxyUtilities.metadataCookieName.equalsIgnoreCase(cookieName)) {
+                    JsonObject metadata = new JsonParser().parse(cookie.get("value").getAsString()).getAsJsonObject();
+                    this.setMetadata(metadata);
                 }
             }
         }
         super.beforeCommand(session, request, response);
+        Thread.currentThread().setName(currentName);
     }
 
     @Override
     public void afterCommand(TestSession session, HttpServletRequest request, HttpServletResponse response) {
+        String currentName = Thread.currentThread().getName();
+        Thread.currentThread().setName(getProxyName());
         if (request instanceof WebDriverRequest && "DELETE".equalsIgnoreCase(request.getMethod())) {
             WebDriverRequest seleniumRequest = (WebDriverRequest) request;
             if (seleniumRequest.getRequestType().equals(RequestType.STOP_SESSION)) {
@@ -181,6 +213,7 @@ public class CloudTestingRemoteProxy extends DefaultRemoteProxy {
             }
         }
         super.afterCommand(session, request, response);
+        Thread.currentThread().setName(currentName);
     }
 
     @Override
@@ -232,10 +265,6 @@ public class CloudTestingRemoteProxy extends DefaultRemoteProxy {
         return false;
     }
 
-    public boolean convertVideoFileToMP4() {
-        return false;
-    }
-
     public void addTestToDashboard(String seleniumSessionId, boolean testCompleted) {
         addToDashboardCalled = false;
         new Thread(() -> {
@@ -247,22 +276,30 @@ public class CloudTestingRemoteProxy extends DefaultRemoteProxy {
                 String fileNameWithFullPath = testInformation.getVideoFolderPath() + "/" + testInformation.getFileName();
                 commonProxyUtilities.downloadFile(testInformation.getVideoUrl(), fileNameWithFullPath,
                         getUserNameValue(), getAccessKeyValue(), useAuthenticationToDownloadFile());
-                if (convertVideoFileToMP4()) {
-                    commonProxyUtilities.convertFlvFileToMP4(testInformation);
-                }
                 for (String logUrl : testInformation.getLogUrls()) {
                     String fileName = logUrl.substring(logUrl.lastIndexOf('/') + 1);
+                    // In order to not try to save questionable characters that the filesystem might disagree with
+
+                    if(fileName.contains("?")){
+                        fileName = fileName.substring(0, fileName.indexOf('?'));
+                    }
                     fileNameWithFullPath = testInformation.getLogsFolderPath() + "/" + fileName;
                     commonProxyUtilities.downloadFile(logUrl, fileNameWithFullPath,
-                            getUserNameValue(), getAccessKeyValue(), useAuthenticationToDownloadFile());
+                            getUserNameValue(), getAccessKeyValue(), useAuthenticationToDownloadFile(), 2);
                 }
+                for (RemoteLogFile remoteLogFile : testInformation.getRemoteLogFiles()) {
+                    fileNameWithFullPath = testInformation.getLogsFolderPath() + "/" + remoteLogFile.getLocalFileName();
+                    commonProxyUtilities.downloadFile(remoteLogFile.getRemoteUrl(), fileNameWithFullPath,
+                            getUserNameValue(), getAccessKeyValue(), remoteLogFile.isAuthenticationRequired(), 2);
+                }
+
                 createFeatureNotImplementedFile(testInformation.getLogsFolderPath());
-                Dashboard.updateDashboard(testInformation);
+                DashboardCollection.updateDashboard(testInformation);
                 addToDashboardCalled = true;
             } catch (Exception e) {
                 logger.error(e.toString(), e);
             }
-        }, "CloudTestingRemoteProxy addTestToDashboard seleniumSessionId [" + seleniumSessionId + "] testCompleted ["
+        }, getProxyName() + " addTestToDashboard seleniumSessionId [" + seleniumSessionId + "] testCompleted ["
                 + testCompleted + "]").start();
     }
 
@@ -300,6 +337,7 @@ public class CloudTestingRemoteProxy extends DefaultRemoteProxy {
         try {
             String textToWrite = String.format("Feature not implemented for %s, we are happy to receive PRs", getProxyName());
             FileUtils.writeStringToFile(notImplemented, textToWrite, StandardCharsets.UTF_8);
+            CommonProxyUtilities.setFilePermissions(notImplemented.toPath());
         } catch (IOException e) {
             logger.info(e.toString(), e);
         }
@@ -308,20 +346,17 @@ public class CloudTestingRemoteProxy extends DefaultRemoteProxy {
 
     @Override
     public void startPolling() {
-        super.startPolling();
         cloudProxyNodePoller = new CloudProxyNodePoller(this);
         cloudProxyNodePoller.start();
     }
 
     @Override
     public void stopPolling() {
-        super.stopPolling();
         cloudProxyNodePoller.interrupt();
     }
 
     @Override
     public void teardown() {
-        super.teardown();
         stopPolling();
     }
 
@@ -344,6 +379,8 @@ public class CloudTestingRemoteProxy extends DefaultRemoteProxy {
      */
     @VisibleForTesting
     public void terminateIdleSessions() {
+        String currentName = Thread.currentThread().getName();
+        Thread.currentThread().setName(getProxyName());
         for (TestSlot testSlot : getTestSlots()) {
             if (testSlot.getSession() != null &&
                     (testSlot.getSession().getInactivityTime() >= (getMaxTestIdleTime() * 1000L))) {
@@ -355,9 +392,10 @@ public class CloudTestingRemoteProxy extends DefaultRemoteProxy {
                     addTestToDashboard(testSlot.getSession().getExternalKey().getKey(), false);
                 }
                 getRegistry().forceRelease(testSlot, SessionTerminationReason.ORPHAN);
-                logger.info(getProxyName() + " Releasing slot and terminating session due to inactivity.");
+                logger.warn("Releasing slot and terminating session due to inactivity.");
             }
         }
+        Thread.currentThread().setName(currentName);
     }
 
     /*

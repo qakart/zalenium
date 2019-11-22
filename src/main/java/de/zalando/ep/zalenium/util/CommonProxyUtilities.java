@@ -2,12 +2,7 @@ package de.zalando.ep.zalenium.util;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
-import de.zalando.ep.zalenium.dashboard.TestInformation;
 import org.apache.commons.codec.binary.Base64;
-import org.apache.commons.exec.CommandLine;
-import org.apache.commons.exec.DefaultExecutor;
-import org.apache.commons.exec.ExecuteWatchdog;
-import org.apache.commons.io.FileUtils;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
@@ -22,6 +17,12 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.attribute.GroupPrincipal;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.UserPrincipal;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -31,6 +32,7 @@ import org.slf4j.LoggerFactory;
 public class CommonProxyUtilities {
 
     private static final Logger LOG = LoggerFactory.getLogger(CommonProxyUtilities.class.getName());
+    public static final String metadataCookieName = "zaleniumMetadata";
 
     /*
         Reading a JSON with DockerSelenium capabilities from a given URL
@@ -82,15 +84,18 @@ public class CommonProxyUtilities {
         return null;
     }
 
+    public void downloadFile(String fileUrl, String fileNameWithFullPath, String user, String password,
+    boolean authenticate) throws InterruptedException{
+        downloadFile(fileUrl, fileNameWithFullPath, user, password, authenticate, 10);
+    }
+
     /*
         Downloading a file, method adapted from:
         http://code.runnable.com/Uu83dm5vSScIAACw/download-a-file-from-the-web-for-java-files-and-save
      */
-    @SuppressWarnings("ResultOfMethodCallIgnored")
     public void downloadFile(String fileUrl, String fileNameWithFullPath, String user, String password,
-                             boolean authenticate)
+                             boolean authenticate, int maxAttempts)
             throws InterruptedException {
-        int maxAttempts = 10;
         int currentAttempts = 0;
         // Videos are usually not ready right away, we put a little sleep to avoid falling into the catch/retry.
         Thread.sleep(1000 * 5);
@@ -104,6 +109,7 @@ public class CommonProxyUtilities {
                     urlConnection.setRequestProperty("Authorization", basicAuth);
                 }
 
+                urlConnection.setRequestProperty("Accept", "*/*");
                 //Code to download
                 InputStream in = new BufferedInputStream(urlConnection.getInputStream());
                 ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -117,14 +123,14 @@ public class CommonProxyUtilities {
                 in.close();
                 byte[] response = out.toByteArray();
                 File fileToDownload = new File(fileNameWithFullPath);
-                File fileToDownloadFolder = fileToDownload.getParentFile();
-                if (!fileToDownloadFolder.exists()) {
-                    fileToDownloadFolder.mkdirs();
+                if (!Files.exists(fileToDownload.getParentFile().toPath())) {
+                    Files.createDirectory(fileToDownload.getParentFile().toPath());
                 }
                 FileOutputStream fos = new FileOutputStream(fileNameWithFullPath);
                 fos.write(response);
                 fos.close();
                 //End download code
+                setFilePermissions(Paths.get(fileNameWithFullPath));
                 currentAttempts = maxAttempts + 1;
                 LOG.info("File downloaded to " + fileNameWithFullPath);
             } catch (IOException e) {
@@ -143,45 +149,29 @@ public class CommonProxyUtilities {
         }
     }
 
-    public void convertFlvFileToMP4(TestInformation testInformation) {
-        // Names of the old and the new file
-        String flvVideoFile = testInformation.getVideoFolderPath() + "/" + testInformation.getFileName();
-        testInformation.setFileExtension(".mp4");
-        testInformation.buildVideoFileName();
-        String mp4VideoFile = testInformation.getVideoFolderPath() + "/" + testInformation.getFileName();
-
-        // Command to convert the file to MP4
-        CommandLine commandLine = new CommandLine("ffmpeg");
-        commandLine.addArgument("-i");
-        commandLine.addArgument(flvVideoFile);
-        commandLine.addArgument(mp4VideoFile);
-        DefaultExecutor defaultExecutor = new DefaultExecutor();
-        ExecuteWatchdog executeWatchdog = new ExecuteWatchdog(10 * 1000);
-        defaultExecutor.setWatchdog(executeWatchdog);
-        try {
-            int exitValue = defaultExecutor.execute(commandLine);
-            if (exitValue != 0) {
-                LOG.warn("File " + flvVideoFile + " could not be converted to MP4. Exit value: " +
-                exitValue);
-            }
-        } catch (IOException e) {
-            LOG.error(e.toString(), e);
-        }
-
-        // Deleting the FLV file
-        FileUtils.deleteQuietly(new File(flvVideoFile));
-    }
-
-    @SuppressWarnings("WeakerAccess")
-    public String getCurrentDateAndTimeFormatted() {
+    public String getDateAndTimeFormatted(Date d) {
         DateFormat dateFormat = new SimpleDateFormat("yyyyMMddHHmmssSSS");
-        return dateFormat.format(new Date());
+        return dateFormat.format(d);
     }
 
-    @SuppressWarnings("WeakerAccess")
-    public String getShortDateAndTime() {
+    public String getShortDateAndTime(Date d) {
         DateFormat dateFormat = new SimpleDateFormat("dd-MMM HH:mm:ss");
-        return dateFormat.format(new Date());
+        return dateFormat.format(d);
+    }
+    
+    public Date getDateAndTime(Date d, int addtionalDays) {
+        return new Date(d.getTime() + addtionalDays * 86400000);
+    }
+
+    public static void setFilePermissions(Path filePath) throws IOException {
+        if ("root".equalsIgnoreCase(ZaleniumConfiguration.getCurrentUser())) {
+            UserPrincipal hostUid = filePath.getFileSystem()
+                    .getUserPrincipalLookupService().lookupPrincipalByName(ZaleniumConfiguration.getHostUid());
+            Files.setOwner(filePath, hostUid);
+            GroupPrincipal hostGid = filePath.getFileSystem()
+                    .getUserPrincipalLookupService().lookupPrincipalByGroupName(ZaleniumConfiguration.getHostGid());
+            Files.getFileAttributeView(filePath, PosixFileAttributeView.class).setGroup(hostGid);
+        }
     }
 
     private static String readAll(Reader reader) throws IOException {

@@ -2,7 +2,6 @@ package de.zalando.ep.zalenium.aspect;
 
 
 import java.util.EnumSet;
-import java.util.List;
 
 import javax.servlet.DispatcherType;
 
@@ -12,7 +11,6 @@ import org.openqa.grid.web.Hub;
 import org.seleniumhq.jetty9.servlet.FilterHolder;
 import org.seleniumhq.jetty9.servlet.FilterMapping;
 import org.seleniumhq.jetty9.servlet.ServletContextHandler;
-import org.seleniumhq.jetty9.servlet.ServletHandler;
 import org.seleniumhq.jetty9.servlet.ServletHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,10 +21,14 @@ import de.zalando.ep.zalenium.servlet.LivePreviewServlet;
 import de.zalando.ep.zalenium.servlet.VncAuthenticationServlet;
 import de.zalando.ep.zalenium.servlet.ZaleniumConsoleServlet;
 import de.zalando.ep.zalenium.servlet.ZaleniumResourceServlet;
+import de.zalando.ep.zalenium.servlet.GridStatusServlet;
+import de.zalando.ep.zalenium.servlet.SessionsServlet;
 import io.prometheus.client.exporter.MetricsServlet;
 import io.prometheus.client.filter.MetricsFilter;
 import io.prometheus.client.hotspot.DefaultExports;
 import io.prometheus.client.jetty.JettyStatisticsCollector;
+
+import static de.zalando.ep.zalenium.util.ZaleniumConfiguration.ZALENIUM_RUNNING_LOCALLY;
 
 privileged public aspect HubAspect {
     private static final Logger log = LoggerFactory.getLogger(HubAspect.class.getName());
@@ -36,11 +38,13 @@ privileged public aspect HubAspect {
     
     before(ServletContextHandler handler, Hub hub) : callAddDefaultServlets(handler, hub) {
         log.info("Registering custom Zalenium servlets");
-        
-        // This crazy casting is to get around the fact that jetty has been repackaged by selenium, at runtime this will work.
-        Server server = (Server)((Object)hub.server);
-        initialisePrometheus(handler, server);
-        
+
+        if (!ZALENIUM_RUNNING_LOCALLY) {
+            // This crazy casting is to get around the fact that jetty has been repackaged by selenium, at runtime this will work.
+            Server server = (Server)((Object)hub.server);
+            initialisePrometheus(handler, server);
+        }
+
         registerZaleniumServlets(handler);
     }
     
@@ -80,6 +84,8 @@ privileged public aspect HubAspect {
     protected void registerZaleniumServlets(ServletContextHandler handler) {
         handler.addServlet(LivePreviewServlet.class, "/grid/admin/live");
         handler.addServlet(ZaleniumConsoleServlet.class, "/grid/console");
+        handler.addServlet(GridStatusServlet.class, "/grid/status");
+        handler.addServlet(SessionsServlet.class, "/grid/sessions");
         handler.addServlet(ZaleniumResourceServlet.class, "/resources/*");
         handler.addServlet(DashboardCleanupServlet.class, "/dashboard/cleanup");
         handler.addServlet(DashboardInformationServlet.class, "/dashboard/information");

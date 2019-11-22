@@ -3,15 +3,15 @@
 CONTAINER_NAME="zalenium"
 SELENIUM_IMAGE_NAME=${SELENIUM_IMAGE_NAME:-"elgalu/selenium"}
 MAX_TEST_SESSIONS=${MAX_TEST_SESSIONS:-1}
-CHROME_CONTAINERS=1
-FIREFOX_CONTAINERS=1
 DESIRED_CONTAINERS=${DESIRED_CONTAINERS:-2}
 MAX_DOCKER_SELENIUM_CONTAINERS=${MAX_DOCKER_SELENIUM_CONTAINERS:-10}
+SWARM_OVERLAY_NETWORK=${SWARM_OVERLAY_NETWORK:-""}
 ZALENIUM_ARTIFACT="$(pwd)/${project.build.finalName}.jar"
-DEPRECATED_PARAMETERS=false
 SAUCE_LABS_ENABLED=${SAUCE_LABS_ENABLED:-false}
 BROWSER_STACK_ENABLED=${BROWSER_STACK_ENABLED:-false}
 TESTINGBOT_ENABLED=${TESTINGBOT_ENABLED:-false}
+CBT_ENABLED=${CBT_ENABLED:-false}
+LT_ENABLED=${LT_ENABLED:-false}
 VIDEO_RECORDING_ENABLED=${VIDEO_RECORDING_ENABLED:-true}
 SCREEN_WIDTH=${SCREEN_WIDTH:-1920}
 SCREEN_HEIGHT=${SCREEN_HEIGHT:-1080}
@@ -20,10 +20,24 @@ SEND_ANONYMOUS_USAGE_INFO=${SEND_ANONYMOUS_USAGE_INFO:-true}
 START_TUNNEL=${START_TUNNEL:-false}
 DEBUG_ENABLED=${DEBUG_ENABLED:-false}
 KEEP_ONLY_FAILED_TESTS=${KEEP_ONLY_FAILED_TESTS:-false}
+RETENTION_PERIOD=${RETENTION_PERIOD:-3}
 LOG_JSON=${LOG_JSON:-false}
 LOGBACK_PATH=${LOGBACK_PATH:-logback.xml}
 NEW_SESSION_WAIT_TIMEOUT=${NEW_SESSION_WAIT_TIMEOUT:-600000}
+WAIT_FOR_AVAILABLE_NODES=${WAIT_FOR_AVAILABLE_NODES:-true}
+# Time in ms to wait for a container to start
+TIME_TO_WAIT_TO_START=${TIME_TO_WAIT_TO_START:-180000}
+# Maximum amount of times a test request is processed before starting a new node
+MAX_TIMES_TO_PROCESS_REQUEST=${MAX_TIMES_TO_PROCESS_REQUEST:-30}
+# How often should Zalenium check the status of the current containers/pods. See checkContainers() in AutoStartProxySet
+CHECK_CONTAINERS_INTERVAL=${CHECK_CONTAINERS_INTERVAL:-5000}
+# Timeout for a proxy during cleanup tasks. See isCleaningUp() in DockerSeleniumRemoteProxy
+ZALENIUM_PROXY_CLEANUP_TIMEOUT=${ZALENIUM_PROXY_CLEANUP_TIMEOUT:-180}
+# browserTimeout parameter, used in hub and nodes.
+SEL_BROWSER_TIMEOUT_SECS=${SEL_BROWSER_TIMEOUT_SECS:-16000}
 
+HOST_UID=${HOST_UID:-1000}
+HOST_GID=${HOST_GID:-1000}
 GA_TRACKING_ID="UA-88441352-3"
 GA_ENDPOINT=https://www.google-analytics.com/collect
 GA_API_VERSION="1"
@@ -33,14 +47,26 @@ if [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
     KUBERNETES_ENABLED=true
 fi
 
+# Context Path where Zalenium is listening on.  Default is root
+CONTEXT_PATH=${CONTEXT_PATH:-/}
+# If env variable CONTEXT_PATH is root (or not defined)
+# set it to empty string, to avoid two //
+if [ -z "${CONTEXT_PATH}" ] || [ "${CONTEXT_PATH}" = "/" ]; then
+    CONTEXT_PATH=""
+fi
+NGINX_MAX_BODY_SIZE=${NGINX_MAX_BODY_SIZE:-300M}
+
 PID_PATH_SELENIUM=/tmp/selenium-pid
-PID_PATH_DOCKER_SELENIUM_NODE=/tmp/docker-selenium-node-pid
 PID_PATH_SAUCE_LABS_NODE=/tmp/sauce-labs-node-pid
 PID_PATH_TESTINGBOT_NODE=/tmp/testingbot-node-pid
 PID_PATH_BROWSER_STACK_NODE=/tmp/browser-stack-node-pid
+PID_PATH_LT_NODE=/tmp/lt-node-pid
+PID_PATH_CBT_NODE=/tmp/cbt-node-pid
 PID_PATH_SAUCE_LABS_TUNNEL=/tmp/sauce-labs-tunnel-pid
 PID_PATH_TESTINGBOT_TUNNEL=/tmp/testingbot-tunnel-pid
 PID_PATH_BROWSER_STACK_TUNNEL=/tmp/browser-stack-tunnel-pid
+PID_PATH_CBT_TUNNEL=/tmp/cbt-tunnel-pid
+PID_PATH_LT_TUNNEL=/tmp/lt-tunnel-pid
 
 echoerr() { printf "%s\n" "$*" >&2; }
 
@@ -56,8 +82,8 @@ WaitSeleniumHub()
 {
     # Other option is to wait for certain text at
     #  logs/stdout.zalenium.hub.log
-    while ! curl -sSL "http://localhost:4444/wd/hub/status" 2>&1 \
-            | jq -r '.status' 2>&1 | grep "0" >/dev/null; do
+    while ! curl -sSL "http://localhost:4444${CONTEXT_PATH}/wd/hub/status" 2>&1 \
+            | jq -r '.status' 2>/dev/null | grep "0" >/dev/null; do
         echo -n '.'
         sleep 0.2
     done
@@ -79,7 +105,7 @@ export -f WaitStarterProxy
 WaitStarterProxyToRegister()
 {
     # Also wait for the Proxy to be registered into the hub
-    while ! curl -sSL "http://localhost:4444/grid/console" 2>&1 \
+    while ! curl -sSL "http://localhost:4444${CONTEXT_PATH}/grid/console" 2>&1 \
             | grep "DockerSeleniumStarterRemoteProxy" 2>&1 >/dev/null; do
         echo -n '.'
         sleep 0.2
@@ -97,7 +123,7 @@ WaitSauceLabsProxy()
     done
 
     # Also wait for the Proxy to be registered into the hub
-    while ! curl -sSL "http://localhost:4444/grid/console" 2>&1 \
+    while ! curl -sSL "http://localhost:4444${CONTEXT_PATH}/grid/console" 2>&1 \
             | grep "SauceLabsRemoteProxy" 2>&1 >/dev/null; do
         echo -n '.'
         sleep 0.2
@@ -115,7 +141,7 @@ WaitBrowserStackProxy()
     done
 
     # Also wait for the Proxy to be registered into the hub
-    while ! curl -sSL "http://localhost:4444/grid/console" 2>&1 \
+    while ! curl -sSL "http://localhost:4444${CONTEXT_PATH}/grid/console" 2>&1 \
             | grep "BrowserStackRemoteProxy" 2>&1 >/dev/null; do
         echo -n '.'
         sleep 0.2
@@ -133,13 +159,49 @@ WaitTestingBotProxy()
     done
 
     # Also wait for the Proxy to be registered into the hub
-    while ! curl -sSL "http://localhost:4444/grid/console" 2>&1 \
+    while ! curl -sSL "http://localhost:4444${CONTEXT_PATH}/grid/console" 2>&1 \
             | grep "TestingBotRemoteProxy" 2>&1 >/dev/null; do
         echo -n '.'
         sleep 0.2
     done
 }
 export -f WaitTestingBotProxy
+
+WaitCBTProxy()
+{
+    # Wait for the cbt node success
+    while ! curl -sSL "http://localhost:30003/wd/hub/status" 2>&1 \
+            | jq -r '.status' 2>&1 | grep "0" >/dev/null; do
+        echo -n '.'
+        sleep 0.2
+    done
+
+    # Also wait for the Proxy to be registered into the hub
+    while ! curl -sSL "http://localhost:4444${CONTEXT_PATH}/grid/console" 2>&1 \
+            | grep "CBTRemoteProxy" 2>&1 >/dev/null; do
+        echo -n '.'
+        sleep 0.2
+    done
+}
+export -f WaitCBTProxy
+
+WaitLambdaTestProxy()
+{
+    # Wait for the LambdaTest node success
+    while ! curl -sSL "http://localhost:30005/wd/hub/status" 2>&1 \
+            | jq -r '.status' 2>&1 | grep "0" >/dev/null; do
+        echo -n '.'
+        sleep 0.2
+    done
+
+    # Also wait for the Proxy to be registered into the hub
+    while ! curl -sSL "http://localhost:4444${CONTEXT_PATH}/grid/console" 2>&1 \
+            | grep "LambdaTestRemoteProxy" 2>&1 >/dev/null; do
+        echo -n '.'
+        sleep 0.2
+    done
+}
+export -f WaitLambdaTestProxy
 
 WaitForVideosTransferred() {
     local __amount_of_tests_with_video=$(jq .executedTestsWithVideo /home/seluser/videos/executedTestsInfo.json)
@@ -169,32 +231,10 @@ WaitForVideosTransferred() {
 }
 export -f WaitForVideosTransferred
 
-EnsureCleanEnv()
-{
-    log "Ensuring no stale Zalenium related containers are still around..."
-    local __containers=$(docker ps -a -f name=${CONTAINER_NAME}_ -q | wc -l)
-
-    # If there are still containers around; stop gracefully
-    if [ ${__containers} -gt 0 ]; then
-        echo "Removing exited docker-selenium containers..."
-        docker stop $(docker ps -a -f name=${CONTAINER_NAME}_ -q)
-
-        # If there are still containers around; remove them
-        if [ $(docker ps -a -f name=${CONTAINER_NAME}_ -q | wc -l) -gt 0 ]; then
-            docker rm $(docker ps -a -f name=${CONTAINER_NAME}_ -q)
-        fi
-
-        # If there are still containers around; forcibly remove them
-        if [ $(docker ps -a -f name=${CONTAINER_NAME}_ -q | wc -l) -gt 0 ]; then
-            docker rm -f $(docker ps -a -f name=${CONTAINER_NAME}_ -q)
-        fi
-    fi
-}
-
 EnsureDockerWorks()
 {
     log "Ensuring docker works..."
-    if ! docker ps >/dev/null; then
+    if ! docker -H ${DOCKER_HOST} ps >/dev/null; then
         echo "Docker seems to be not working properly, check the above error."
         exit 1
     fi
@@ -228,7 +268,7 @@ DockerTerminate()
         elif [[ $KUBERNETES_ENABLED == "true" ]]; then
             RANDOM_USER_GA_ID=k8s-$(echo -n $HOSTNAME$KUBERNETES_SERVICE_HOST | md5sum)
         else
-            RANDOM_USER_GA_ID=docker-$(docker info 2>&1 | grep -Po '(?<=^ID: )(\w{4}:.+)')
+            RANDOM_USER_GA_ID=docker-$(docker -H ${DOCKER_HOST} info 2>&1 | grep -Po '(?<=^ID: )(\w{4}:.+)')
         fi
 
         # Gathering the options used to start Zalenium, in order to learn about the used options
@@ -268,15 +308,14 @@ StartUp()
     if [ ${KUBERNETES_ENABLED} == "false" ]; then
         EnsureDockerWorks
         CONTAINER_ID=$(grep docker /proc/self/cgroup | head -n 1 | grep -o -E '[0-9a-f]{64}' | tail -n 1)
-        CONTAINER_NAME=$(docker inspect ${CONTAINER_ID} | jq -r '.[0].Name' | sed 's/\///g')
-        EnsureCleanEnv
+        CONTAINER_NAME=$(docker -H ${DOCKER_HOST} inspect ${CONTAINER_ID} | jq -r '.[0].Name' | sed 's/\///g')
 
         log "Ensuring docker-selenium is available..."
-        DOCKER_SELENIUM_IMAGE_COUNT=$(docker images ${SELENIUM_IMAGE_NAME} --quiet | wc -l)
+        DOCKER_SELENIUM_IMAGE_COUNT=$(docker -H ${DOCKER_HOST} images ${SELENIUM_IMAGE_NAME} --quiet | wc -l)
         if [ ${DOCKER_SELENIUM_IMAGE_COUNT} -eq 0 ]; then
             if [ ${PULL_SELENIUM_IMAGE:-false} == "true" ]; then
                 echo "Pulling docker-selenium's image: ${SELENIUM_IMAGE_NAME}"
-                docker pull ${SELENIUM_IMAGE_NAME}
+                docker -H ${DOCKER_HOST} pull ${SELENIUM_IMAGE_NAME}
             else
                 echo "Seems that docker-selenium's image has not been pulled yet"
                 echo "Please run 'docker pull elgalu/selenium', or use your own compatible image via --seleniumImageName"
@@ -348,12 +387,45 @@ StartUp()
             exit 5
         fi
     fi
+    
+    
+    if [ "$CBT_ENABLED" = true ]; then
+        CBT_USERNAME="${CBT_USERNAME:=abc}"
+        CBT_AUTHKEY="${CBT_AUTHKEY:=abc}"
 
-    if [ "$DEPRECATED_PARAMETERS" = true ]; then
-        DESIRED_CONTAINERS=$((CHROME_CONTAINERS + FIREFOX_CONTAINERS))
+        if [ "CBT_USERNAME" = abc ]; then
+            echo "CBT_USERNAME environment variable is not set, cannot start TestingBot node, exiting..."
+            exit 4
+        fi
+
+        if [ "$CBT_AUTHKEY" = abc ]; then
+            echo "CBT_AUTHKEY environment variable is not set, cannot start TestingBot node, exiting..."
+            exit 5
+        fi
     fi
+
+    if [ -z ${LT_ENABLED} ]; then
+        LT_ENABLED=true
+    fi
+
+    if [ "$LT_ENABLED" = true ]; then
+        LT_USERNAME="${LT_USERNAME:=abc}"
+        LT_ACCESS_KEY="${LT_ACCESS_KEY:=abc}"
+
+        if [ "LT_USERNAME" = abc ]; then
+            echo "LT_USERNAME environment variable is not set, cannot start LambdaTest node, exiting..."
+            exit 4
+        fi
+
+        if [ "$LT_ACCESS_KEY" = abc ]; then
+            echo "LT_ACCESS_KEY environment variable is not set, cannot start LambdaTest node, exiting..."
+            exit 5
+        fi
+    fi
+
     export ZALENIUM_DESIRED_CONTAINERS=${DESIRED_CONTAINERS}
     export ZALENIUM_MAX_DOCKER_SELENIUM_CONTAINERS=${MAX_DOCKER_SELENIUM_CONTAINERS}
+    export ZALENIUM_SWARM_OVERLAY_NETWORK=${SWARM_OVERLAY_NETWORK}
     export ZALENIUM_VIDEO_RECORDING_ENABLED=${VIDEO_RECORDING_ENABLED}
     export ZALENIUM_TZ=${TZ}
     export ZALENIUM_SCREEN_WIDTH=${SCREEN_WIDTH}
@@ -362,6 +434,7 @@ StartUp()
     export ZALENIUM_SELENIUM_IMAGE_NAME=${SELENIUM_IMAGE_NAME}
     export ZALENIUM_MAX_TEST_SESSIONS=${MAX_TEST_SESSIONS}
     export ZALENIUM_KEEP_ONLY_FAILED_TESTS=${KEEP_ONLY_FAILED_TESTS}
+    export ZALENIUM_RETENTION_PERIOD=${RETENTION_PERIOD}
     export ZALENIUM_NODE_PARAMS=${SELENIUM_NODE_PARAMS}
 
     # Random ID used for Google Analytics
@@ -374,7 +447,7 @@ StartUp()
     elif [[ $KUBERNETES_ENABLED == "true" ]]; then
         RANDOM_USER_GA_ID=k8s-$(echo -n $HOSTNAME$KUBERNETES_SERVICE_HOST | md5sum)
     else
-        RANDOM_USER_GA_ID=docker-$(docker info 2>&1 | grep -Po '(?<=^ID: )(\w{4}:.+)')
+        RANDOM_USER_GA_ID=docker-$(docker -H ${DOCKER_HOST} info 2>&1 | grep -Po '(?<=^ID: )(\w{4}:.+)')
     fi
 
     export ZALENIUM_GA_API_VERSION=${GA_API_VERSION}
@@ -399,17 +472,27 @@ StartUp()
     fi
 
     echo "Copying files for Dashboard..."
-    cp /home/seluser/index.html /home/seluser/videos/index.html
+    cp /home/seluser/dashboard_template.html /home/seluser/videos/dashboard.html
     cp -r /home/seluser/css /home/seluser/videos
     cp -r /home/seluser/js /home/seluser/videos
+    cp -r /home/seluser/img /home/seluser/videos
+
+    if [ "${WE_HAVE_SUDO_ACCESS}" == "true" ]; then
+        sudo chown -R ${HOST_UID}:${HOST_GID} /home/seluser
+    fi
 
     if [ ! -z ${GRID_USER} ] && [ ! -z ${GRID_PASSWORD} ]; then
         echo "Enabling basic auth via startup script..."
-        htpasswd -bc /home/seluser/.htpasswd ${GRID_USER} ${GRID_PASSWORD}
+        htpasswd -bc /home/seluser/.htpasswd "${GRID_USER}" "${GRID_PASSWORD}"
     fi
 
+    # In nginx.conf, Replace {{contextPath}} with value of APPEND_CONTEXT_PATH
+    sed -i.bak "s~{{contextPath}}~${CONTEXT_PATH}~" /home/seluser/nginx.conf
+    sed -i.bak "s~{{nginxMaxBodySize}}~${NGINX_MAX_BODY_SIZE}~" /home/seluser/nginx.conf
+    sed -i.bak "s~{{zaleniumVersion}}~${project.version}~" /home/seluser/error.html
+
     echo "Starting Nginx reverse proxy..."
-    nginx
+    nginx -c /home/seluser/nginx.conf
 
     echo "Starting Selenium Hub..."
 
@@ -433,20 +516,21 @@ StartUp()
     -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
     -cp ${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 \
     -role hub -port 4445 -newSessionWaitTimeout ${NEW_SESSION_WAIT_TIMEOUT} \
+    -browserTimeout ${SEL_BROWSER_TIMEOUT_SECS} \
     -registry de.zalando.ep.zalenium.registry.ZaleniumRegistry \
     ${SELENIUM_HUB_PARAMS} \
     ${DEBUG_FLAG} &
 
     echo $! > ${PID_PATH_SELENIUM}
-
+    
     if ! timeout --foreground "1m" bash -c WaitSeleniumHub; then
         echo "GridLauncher failed to start after 1 minute, failing..."
-        curl "http://localhost:4444/wd/hub/status"
+        curl "http://localhost:4444${CONTEXT_PATH}/wd/hub/status"
         exit 11
     fi
     echo "Selenium Hub started!"
 
-    if ! curl -sSL "http://localhost:4444" | grep Grid >/dev/null; then
+    if ! curl -sSL "http://localhost:4444${CONTEXT_PATH}" | grep Grid >/dev/null; then
         echo "Error: The Grid is not listening at port 4444"
         exit 7
     fi
@@ -456,7 +540,7 @@ StartUp()
         java -Dlogback.loglevel=${DEBUG_MODE} -Dlogback.appender=${LOGBACK_APPENDER} \
          -Dlogback.configurationFile=${LOGBACK_PATH} \
          -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
-         -cp ${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 -role node -hub http://localhost:4444/grid/register \
+         -cp ${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 -role node -hub http://localhost:4444${CONTEXT_PATH}/grid/register \
          -registerCycle 0 -proxy de.zalando.ep.zalenium.proxy.SauceLabsRemoteProxy \
          -nodePolling 90000 -port 30001 ${DEBUG_FLAG} &
         echo $! > ${PID_PATH_SAUCE_LABS_NODE}
@@ -485,7 +569,7 @@ StartUp()
         java -Dlogback.loglevel=${DEBUG_MODE} -Dlogback.appender=${LOGBACK_APPENDER} \
          -Dlogback.configurationFile=${LOGBACK_PATH} \
          -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
-         -cp ${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 -role node -hub http://localhost:4444/grid/register \
+         -cp ${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 -role node -hub http://localhost:4444${CONTEXT_PATH}/grid/register \
          -registerCycle 0 -proxy de.zalando.ep.zalenium.proxy.BrowserStackRemoteProxy \
          -nodePolling 90000 -port 30002 ${DEBUG_FLAG} &
         echo $! > ${PID_PATH_BROWSER_STACK_NODE}
@@ -513,7 +597,7 @@ StartUp()
         java -Dlogback.loglevel=${DEBUG_MODE} -Dlogback.appender=${LOGBACK_APPENDER} \
          -Dlogback.configurationFile=${LOGBACK_PATH} \
          -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
-         -cp ${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 -role node -hub http://localhost:4444/grid/register \
+         -cp ${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 -role node -hub http://localhost:4444${CONTEXT_PATH}/grid/register \
          -registerCycle 0 -proxy de.zalando.ep.zalenium.proxy.TestingBotRemoteProxy \
          -nodePolling 90000 -port 30003 ${DEBUG_FLAG} &
         echo $! > ${PID_PATH_TESTINGBOT_NODE}
@@ -535,6 +619,62 @@ StartUp()
     else
         echo "TestingBot not enabled..."
     fi
+    
+    if [ "$CBT_ENABLED" = true ]; then
+        echo "Starting CBT node..."
+        java -Dlogback.loglevel=${DEBUG_MODE} -Dlogback.appender=${LOGBACK_APPENDER} \
+         -Dlogback.configurationFile=${LOGBACK_PATH} \
+         -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
+         -cp ${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 -role node -hub http://localhost:4444${CONTEXT_PATH}/grid/register \
+         -registerCycle 0 -proxy de.zalando.ep.zalenium.proxy.CBTRemoteProxy \
+         -nodePolling 90000 -port 30003 ${DEBUG_FLAG} &
+        echo $! > ${PID_PATH_TESTINGBOT_NODE}
+
+        if ! timeout --foreground "40s" bash -c WaitCBTProxy; then
+            echo "CBTRemoteProxy failed to start after 40 seconds, failing..."
+            exit 12
+        fi
+        echo "CBT node started!"
+        if [ "$START_TUNNEL" = true ]; then
+            export CBT_LOG_FILE="$(pwd)/logs/cbt-stdout.log"
+            export CBT_TUNNEL="true"
+            echo "Starting CBT Tunnel..."
+            ./start-cbt.sh &
+            echo $! > ${PID_PATH_CBT_TUNNEL}
+            # Now wait for the tunnel to be ready
+            timeout --foreground ${CBT_WAIT_TIMEOUT} ./wait-cbt.sh
+        fi
+    else
+        echo "CBT not enabled..."
+    fi
+
+    if [ "$LT_ENABLED" = true ]; then
+        echo "Starting LambdaTest node..."
+        java -Dlogback.loglevel=${DEBUG_MODE} -Dlogback.appender=${LOGBACK_APPENDER} \
+         -Dlogback.configurationFile=${LOGBACK_PATH} \
+         -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
+         -cp ${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 -role node -hub http://localhost:4444${CONTEXT_PATH}/grid/register \
+         -registerCycle 0 -proxy de.zalando.ep.zalenium.proxy.LambdaTestRemoteProxy \
+         -nodePolling 90000 -port 30005 ${DEBUG_FLAG} &
+        echo $! > ${PID_PATH_LT_NODE}
+
+        if ! timeout --foreground "40s" bash -c WaitLambdaTestProxy; then
+            echo "LambdaTestRemoteProxy failed to start after 40 seconds, failing..."
+            exit 12
+        fi
+        echo "LambdaTest node started!"
+        if [ "$START_TUNNEL" = true ]; then
+            export LT_LOG_FILE="$(pwd)/logs/lt-stdout.log"
+            export LT_TUNNEL="true"
+            echo "Starting LambdaTest Tunnel..."
+            ./start-lambdatest.sh &
+            echo $! > ${PID_PATH_LT_TUNNEL}
+            # Now wait for the tunnel to be ready
+            timeout --foreground ${LT_WAIT_TIMEOUT} ./wait-lambdatest.sh
+        fi
+    else
+        echo "LambdaTest not enabled..."
+    fi
 
     echo "Zalenium is now ready!"
 
@@ -542,7 +682,7 @@ StartUp()
 
         DisplayDataProcessingAgreement
         if [ ${KUBERNETES_ENABLED} == "false" ]; then
-            docker info >docker_info.txt 2>&1
+            docker -H ${DOCKER_HOST} info >docker_info.txt 2>&1
 
             # Random ID generated by each docker installation, not related to the user nor the machine
             DOCKER_CLIENT_VERSION=$(docker -v)
@@ -566,12 +706,14 @@ StartUp()
         fi
 
         # Gathering the options used to start Zalenium, in order to learn about the used options
-        ZALENIUM_START_COMMAND="zalenium.sh --deprecatedParameters $DEPRECATED_PARAMETERS
-            --desiredContainers $DESIRED_CONTAINERS --maxDockerSeleniumContainers $MAX_DOCKER_SELENIUM_CONTAINERS
-            --maxTestSessions $MAX_TEST_SESSIONS --sauceLabsEnabled $SAUCE_LABS_ENABLED
-            --browserStackEnabled $BROWSER_STACK_ENABLED --testingBotEnabled $TESTINGBOT_ENABLED
-            --videoRecordingEnabled $VIDEO_RECORDING_ENABLED --screenWidth $SCREEN_WIDTH --screenHeight $SCREEN_HEIGHT
-            --timeZone $TZ"
+        ZALENIUM_START_COMMAND="zalenium.sh --desiredContainers $DESIRED_CONTAINERS
+            --maxDockerSeleniumContainers $MAX_DOCKER_SELENIUM_CONTAINERS --maxTestSessions $MAX_TEST_SESSIONS
+            --swarmOverlayNetwork $SWARM_OVERLAY_NETWORK
+            --sauceLabsEnabled $SAUCE_LABS_ENABLED --browserStackEnabled $BROWSER_STACK_ENABLED
+            --testingBotEnabled $TESTINGBOT_ENABLED --cbtEnabled $CBT_ENABLED
+            --lambdaTestEnabled $LT_ENABLED
+            --videoRecordingEnabled $VIDEO_RECORDING_ENABLED
+            --screenWidth $SCREEN_WIDTH --screenHeight $SCREEN_HEIGHT --timeZone $TZ"
 
         local args=(
             --max-time 10
@@ -648,6 +790,32 @@ ShutDown()
             rm ${PID_PATH_TESTINGBOT_NODE}
         fi
     fi
+    
+    if [ -f ${PID_PATH_CBT_NODE} ];
+    then
+        echo "Stopping CBT node..."
+        PID=$(cat ${PID_PATH_CBT_NODE});
+        kill ${PID};
+        _returnedValue=$?
+        if [ "${_returnedValue}" != "0" ] ; then
+            echo "Failed to send kill signal to CBT node!"
+        else
+            rm ${PID_PATH_CBT_NODE}
+        fi
+    fi
+
+    if [ -f ${PID_PATH_LT_NODE} ];
+    then
+        echo "Stopping LambdaTest node..."
+        PID=$(cat ${PID_PATH_LT_NODE});
+        kill ${PID};
+        _returnedValue=$?
+        if [ "${_returnedValue}" != "0" ] ; then
+            echo "Failed to send kill signal to LambdaTest node!"
+        else
+            rm ${PID_PATH_LT_NODE}
+        fi
+    fi
 
     if [ -f ${PID_PATH_SAUCE_LABS_TUNNEL} ];
     then
@@ -690,6 +858,34 @@ ShutDown()
             rm ${PID_PATH_TESTINGBOT_TUNNEL}
         fi
     fi
+    
+    if [ -f ${PID_PATH_CBT_TUNNEL} ];
+    then
+        echo "Stopping CBT tunnel..."
+        PID=$(cat ${PID_PATH_CBT_TUNNEL});
+        kill -SIGTERM ${PID};
+        wait ${PID};
+        _returnedValue=$?
+        if [ "${_returnedValue}" != "0" ] ; then
+            echo "Failed to send kill signal to the CBT tunnel!"
+        else
+            rm ${PID_PATH_CBT_TUNNEL}
+        fi
+    fi
+
+    if [ -f ${PID_PATH_LT_TUNNEL} ];
+    then
+        echo "Stopping LambdaTest tunnel..."
+        PID=$(cat ${PID_PATH_LT_TUNNEL});
+        kill -SIGTERM ${PID};
+        wait ${PID};
+        _returnedValue=$?
+        if [ "${_returnedValue}" != "0" ] ; then
+            echo "Failed to send kill signal to the LambdaTest tunnel!"
+        else
+            rm ${PID_PATH_LT_TUNNEL}
+        fi
+    fi
 
     if [ -f /home/seluser/videos/executedTestsInfo.json ]; then
         # Wait for the dashboard and the videos, if applies
@@ -713,23 +909,6 @@ ShutDown()
             rm ${PID_PATH_SELENIUM}
         fi
     fi
-
-    if [ -f ${PID_PATH_DOCKER_SELENIUM_NODE} ];
-    then
-        echo "Stopping DockerSeleniumStarter node..."
-        PID=$(cat ${PID_PATH_DOCKER_SELENIUM_NODE});
-        kill ${PID};
-        _returnedValue=$?
-        if [ "${_returnedValue}" != "0" ] ; then
-            echo "Failed to send kill signal to DockerSeleniumStarter node!"
-        else
-            rm ${PID_PATH_DOCKER_SELENIUM_NODE}
-        fi
-    fi
-
-    if [ ${KUBERNETES_ENABLED} == "false" ]; then
-        EnsureCleanEnv
-    fi
 }
 
 function usage()
@@ -741,9 +920,12 @@ function usage()
     echo -e "\t start <options, see below>"
     echo -e "\t --desiredContainers -> Number of nodes/containers created on startup. Default is 2."
     echo -e "\t --maxDockerSeleniumContainers -> Max number of docker-selenium containers running at the same time. Default is 10."
+    echo -e "\t --swarmOverlayNetwork -> Netowrk used for the swarm."
     echo -e "\t --sauceLabsEnabled -> Determines if the Sauce Labs node is started. Defaults to 'false'."
     echo -e "\t --browserStackEnabled -> Determines if the Browser Stack node is started. Defaults to 'false'."
     echo -e "\t --testingBotEnabled -> Determines if the TestingBot node is started. Defaults to 'false'."
+    echo -e "\t --cbtEnabled -> Determines if the CBT node is started. Defaults to 'false'."
+    echo -e "\t --lambdaTestEnabled -> Determines if the LambdaTest node is started. Defaults to 'false'."
     echo -e "\t --startTunnel -> When using a cloud testing platform is enabled, starts the tunnel to allow local testing. Defaults to 'false'."
     echo -e "\t --videoRecordingEnabled -> Sets if video is recorded in every test. Defaults to 'true'."
     echo -e "\t --screenWidth -> Sets the screen width. Defaults to 1900"
@@ -758,6 +940,7 @@ function usage()
     echo -e "\t --gridPassword -> allows you to specify a password to enable basic auth protection, --gridUser must be provided also."
     echo -e "\t --maxTestSessions -> max amount of tests executed per container, defaults to '1'."
     echo -e "\t --keepOnlyFailedTests -> Keeps only videos of failed tests (you need to send a cookie). Defaults to 'false'"
+ 	echo -e "\t --retentionPeriod -> Number of day's a testentry should be kept in dashboard before cleanup. Defaults to 3"
     echo ""
     echo -e "\t stop"
     echo ""
@@ -766,6 +949,8 @@ function usage()
     echo -e "\t start --desiredContainers 2 --sauceLabsEnabled true"
     echo -e "\t - Starting Zalenium with 2 containers and with BrowserStack"
     echo -e "\t start --desiredContainers 2 --browserStackEnabled true"
+    echo -e "\t - Starting Zalenium with 2 containers and with LambdaTest"
+    echo -e "\t start --desiredContainers 2 --lambdaTestEnabled true"
     echo -e "\t - Starting Zalenium screen width 1440 and height 810, time zone \"America/Montreal\""
     echo -e "\t start --screenWidth 1440 --screenHeight 810 --timeZone \"America/Montreal\""
 }
@@ -788,19 +973,14 @@ case ${SCRIPT_ACTION} in
                     usage
                     exit
                     ;;
-                --chromeContainers)
-                    DEPRECATED_PARAMETERS=true
-                    CHROME_CONTAINERS=${VALUE}
-                    ;;
-                --firefoxContainers)
-                    DEPRECATED_PARAMETERS=true
-                    FIREFOX_CONTAINERS=${VALUE}
-                    ;;
                 --desiredContainers)
                     DESIRED_CONTAINERS=${VALUE}
                     ;;
                 --maxDockerSeleniumContainers)
                     MAX_DOCKER_SELENIUM_CONTAINERS=${VALUE}
+                    ;;
+                --swarmOverlayNetwork)
+                    SWARM_OVERLAY_NETWORK=${VALUE}
                     ;;
                 --sauceLabsEnabled)
                     SAUCE_LABS_ENABLED=${VALUE}
@@ -810,6 +990,12 @@ case ${SCRIPT_ACTION} in
                     ;;
                 --testingBotEnabled)
                     TESTINGBOT_ENABLED=${VALUE}
+                    ;;
+                --cbtEnabled)
+                    CBT_ENABLED=${VALUE}
+                    ;;
+                --lambdaTestEnabled)
+                    LT_ENABLED=${VALUE}
                     ;;
                 --videoRecordingEnabled)
                     VIDEO_RECORDING_ENABLED=${VALUE}
@@ -852,6 +1038,9 @@ case ${SCRIPT_ACTION} in
                     ;;
                 --keepOnlyFailedTests)
                     KEEP_ONLY_FAILED_TESTS=${VALUE}
+                    ;;
+                --retentionPeriod)
+                    RETENTION_PERIOD=${VALUE}
                     ;;
                 *)
                     echo "ERROR: unknown parameter \"$PARAM\""

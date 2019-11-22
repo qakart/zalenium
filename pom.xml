@@ -6,7 +6,7 @@
 
     <groupId>de.zalando.ep</groupId>
     <artifactId>zalenium</artifactId>
-    <version>3.12.0e-SNAPSHOT</version>
+    <version>3.141.59v-SNAPSHOT</version>
     <name>Zalenium</name>
     <description>An on-demand, dynamic local Selenium Grid with an extension to a cloud testing platform.</description>
 
@@ -45,33 +45,40 @@
             <organization>Zalando SE</organization>
             <organizationUrl>https://tech.zalando.com/</organizationUrl>
         </developer>
+        <developer>
+            <name>Joel Pearson</name>
+            <email>japearson@agiledigital.com.au</email>
+            <url>https://github.com/pearj</url>
+            <organization>Agile Digital</organization>
+            <organizationUrl>https://agiledigital.com.au/</organizationUrl>
+        </developer>
     </developers>
 
     <properties>
-        <selenium-server.major-minor.version>3.12</selenium-server.major-minor.version>
-        <selenium-server.patch-level.version>0</selenium-server.patch-level.version>
+        <selenium-server.major-minor.version>3.141</selenium-server.major-minor.version>
+        <selenium-server.patch-level.version>59</selenium-server.patch-level.version>
         <!-- This needs to match what is in the Selenium Server pom file -->
-        <jetty.version>9.4.8.v20171121</jetty.version>
-        <docker-client.version>8.11.2</docker-client.version>
-        <kubernetes-client.version>3.1.11</kubernetes-client.version>
+        <jetty.version>9.4.12.v20180830</jetty.version>
+        <docker-client.version>8.15.0</docker-client.version>
+        <kubernetes-client.version>4.1.0</kubernetes-client.version>
         <junit.version>4.12</junit.version>
-        <mockito.version>2.18.3</mockito.version>
-        <awaitility.version>3.1.0</awaitility.version>
+        <mockito.version>2.23.0</mockito.version>
+        <awaitility.version>3.1.2</awaitility.version>
         <testng.version>6.14.3</testng.version>
         <slf4j.version>1.7.25</slf4j.version>
-        <logstash-logback-encoder.version>5.1</logstash-logback-encoder.version>
+        <logstash-logback-encoder.version>5.2</logstash-logback-encoder.version>
         <maven.compiler.source>1.8</maven.compiler.source>
         <ch.qos.logback.version>1.2.3</ch.qos.logback.version>
         <maven.compiler.target>1.8</maven.compiler.target>
         <maven.compiler.plugin>3.7.0</maven.compiler.plugin>
         <maven-resources-plugin.version>3.0.2</maven-resources-plugin.version>
         <maven-shade-plugin.version>3.1.0</maven-shade-plugin.version>
-        <maven-surefire-plugin.version>2.21.0</maven-surefire-plugin.version>
-        <maven-failsafe-plugin.version>2.21.0</maven-failsafe-plugin.version>
+        <maven-surefire-plugin.version>2.22.0</maven-surefire-plugin.version>
+        <maven-failsafe-plugin.version>2.22.0</maven-failsafe-plugin.version>
         <versions-maven-plugin.version>2.5</versions-maven-plugin.version>
         <exec-maven-plugin.version>1.6.0</exec-maven-plugin.version>
         <jacoco-maven-plugin.version>0.7.9</jacoco-maven-plugin.version>
-        <prometheus.version>0.3.0</prometheus.version>
+        <prometheus.version>0.5.0</prometheus.version>
         <aspectj.version>1.8.13</aspectj.version>
         <aspectj-maven-plugin.version>1.11</aspectj-maven-plugin.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -81,6 +88,8 @@
         <skip.surefire.tests>${skipTests}</skip.surefire.tests>
         <skip.failsafe.setup>false</skip.failsafe.setup>
         <integrationToTest>sauceLabs</integrationToTest>
+        <httpmime.version>4.5.6</httpmime.version>
+        <junit.system-rules.version>1.19.0</junit.system-rules.version>
     </properties>
 
     <dependencies>
@@ -193,12 +202,6 @@
             <artifactId>jetty-server</artifactId>
             <scope>provided</scope>
             <version>${jetty.version}</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>*</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-            </exclusions>
         </dependency>
         <dependency>
             <groupId>io.fabric8</groupId>
@@ -217,6 +220,22 @@
             <artifactId>asciitable</artifactId>
             <version>0.3.2</version>
         </dependency>
+        <!-- https://mvnrepository.com/artifact/com.google.code.gson/gson -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.8.5</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpmime</artifactId>
+            <version>${httpmime.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-collections4</artifactId>
+            <version>4.3</version>
+        </dependency>
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
@@ -227,6 +246,12 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
             <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.github.stefanbirkner</groupId>
+            <artifactId>system-rules</artifactId>
+            <version>${junit.system-rules.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -329,6 +354,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
+                <version>2.4</version>
                 <configuration>
                     <archive>
                         <manifestSections>

@@ -6,7 +6,6 @@ import static de.zalando.ep.zalenium.proxy.DockerSeleniumRemoteProxy.DockerSelen
 import static de.zalando.ep.zalenium.proxy.DockerSeleniumRemoteProxy.DockerSeleniumContainerAction.SEND_NOTIFICATION;
 import static de.zalando.ep.zalenium.proxy.DockerSeleniumRemoteProxy.DockerSeleniumContainerAction.START_RECORDING;
 import static de.zalando.ep.zalenium.proxy.DockerSeleniumRemoteProxy.DockerSeleniumContainerAction.STOP_RECORDING;
-import static de.zalando.ep.zalenium.proxy.DockerSeleniumRemoteProxy.DockerSeleniumContainerAction.TRANSFER_LOGS;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -22,7 +21,6 @@ import java.util.Arrays;
 import java.util.Collections;
 
 import org.apache.commons.lang3.RandomStringUtils;
-import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
 import com.google.common.collect.ImmutableList;
@@ -50,20 +48,16 @@ public class DockerContainerMock {
     public static DockerContainerClient getRegisterOnlyDockerContainerClient() {
         DockerContainerClient mock = mock(DockerContainerClient.class);
         
-        when(mock.registerNode(anyString(), any(URL.class))).thenAnswer(new Answer<ContainerClientRegistration>() {
+        when(mock.registerNode(anyString(), any(URL.class))).thenAnswer((Answer<ContainerClientRegistration>) invocation -> {
+            String containerName = invocation.getArgument(0);
+            URL remoteUrl = invocation.getArgument(1);
 
-            @Override
-            public ContainerClientRegistration answer(InvocationOnMock invocation) throws Throwable {
-                String containerName = invocation.getArgument(0);
-                URL remoteUrl = invocation.getArgument(1);
+            ContainerClientRegistration registration = new ContainerClientRegistration();
+            registration.setContainerId(containerName);
+            registration.setIpAddress(remoteUrl.getHost());
+            registration.setNoVncPort(40000);
 
-                ContainerClientRegistration registration = new ContainerClientRegistration();
-                registration.setContainerId(containerName);
-                registration.setIpAddress(remoteUrl.getHost());
-                registration.setNoVncPort(40000);
-
-                return registration;
-            }
+            return registration;
         });
         
         return mock;
@@ -155,7 +149,6 @@ public class DockerContainerMock {
 
             String[] startVideo = {"bash", "-c", START_RECORDING.getContainerAction()};
             String[] stopVideo = {"bash", "-c", STOP_RECORDING.getContainerAction()};
-            String[] transferLogs = {"bash", "-c", TRANSFER_LOGS.getContainerAction()};
             String[] cleanupContainer = {"bash", "-c", CLEANUP_CONTAINER.getContainerAction()};
             String[] sendNotificationCompleted = {"bash", "-c",
                     SEND_NOTIFICATION.getContainerAction().concat(COMPLETED.getTestNotificationMessage())};
@@ -165,9 +158,6 @@ public class DockerContainerMock {
                     DockerClient.ExecCreateParam.attachStderr(), DockerClient.ExecCreateParam.attachStdin()))
                     .thenReturn(execCreation);
             when(dockerClient.execCreate(containerId, stopVideo, DockerClient.ExecCreateParam.attachStdout(),
-                    DockerClient.ExecCreateParam.attachStderr(), DockerClient.ExecCreateParam.attachStdin()))
-                    .thenReturn(execCreation);
-            when(dockerClient.execCreate(containerId, transferLogs, DockerClient.ExecCreateParam.attachStdout(),
                     DockerClient.ExecCreateParam.attachStderr(), DockerClient.ExecCreateParam.attachStdin()))
                     .thenReturn(execCreation);
             when(dockerClient.execCreate(containerId, cleanupContainer, DockerClient.ExecCreateParam.attachStdout(),
