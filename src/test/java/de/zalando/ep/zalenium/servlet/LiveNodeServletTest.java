@@ -72,7 +72,7 @@ public class LiveNodeServletTest {
         livePreviewServletServlet.doPost(request, response);
 
         String responseContent = response.getOutputStream().toString();
-        assertThat(responseContent, containsString("Zalenium Live Preview"));
+        assertThat(responseContent, containsString("UTAP Live Preview"));
         assertThat(responseContent, containsString("http://machine1:4444"));
         assertThat(responseContent, containsString("http://machine2:4444"));
         assertThat(responseContent, containsString("/vnc/host/machine1/port/40000/?nginx=&path=proxy/machine1:40000/websockify&view_only=true'"));
